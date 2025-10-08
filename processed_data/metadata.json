@@ -1,0 +1,32 @@
+{
+    "pace_chlor_a": {
+        "filename": "pace_chlor_a.nc",
+        "path": "processed_data/pace_chlor_a.nc",
+        "size_MB": 0.41,
+        "description": "Chlorophylle PACE OCI (résolution native)"
+    },
+    "modis_chlor_a": {
+        "filename": "modis_chlor_a.nc",
+        "path": "processed_data/modis_chlor_a.nc",
+        "size_MB": 1.0,
+        "description": "Chlorophylle MODIS (4 temps)"
+    },
+    "sst_celsius": {
+        "filename": "sst_celsius.nc",
+        "path": "processed_data/sst_celsius.nc",
+        "size_MB": 1.8,
+        "description": "Température de surface (SST)"
+    },
+    "swot_ssh": {
+        "filename": "swot_ssh.nc",
+        "path": "processed_data/swot_ssh.nc",
+        "size_MB": 0.06,
+        "description": "Hauteur de mer SWOT (SSH)"
+    },
+    "habitat_index_H": {
+        "filename": "habitat_index_H.nc",
+        "path": "processed_data/habitat_index_H.nc",
+        "size_MB": 3.1,
+        "description": "Indice d'habitat potentiel (H)"
+    }
+}
