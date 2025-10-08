@@ -1,0 +1,42 @@
+{
+    "pace_chlor_a": {
+        "filename": "pace_chlor_a.nc",
+        "path": "processed_data/pace_chlor_a.nc",
+        "size_MB": 8.3,
+        "description": "Chlorophylle-a PACE",
+        "variable": "chlor_a",
+        "units": "mg/m³"
+    },
+    "modis_chlor_a": {
+        "filename": "modis_chlor_a.nc",
+        "path": "processed_data/modis_chlor_a.nc",
+        "size_MB": 15.84,
+        "description": "Chlorophylle-a MODIS",
+        "variable": "chlor_a",
+        "units": "mg/m³"
+    },
+    "sst_celsius": {
+        "filename": "sst_celsius.nc",
+        "path": "processed_data/sst_celsius.nc",
+        "size_MB": 7.93,
+        "description": "Température de surface (SST)",
+        "variable": "sst",
+        "units": "°C"
+    },
+    "swot_ssh": {
+        "filename": "swot_ssh.nc",
+        "path": "processed_data/swot_ssh.nc",
+        "size_MB": 7.93,
+        "description": "Hauteur de surface SWOT",
+        "variable": "ssh",
+        "units": "m"
+    },
+    "habitat_index_H": {
+        "filename": "habitat_index_H.nc",
+        "path": "processed_data/habitat_index_H.nc",
+        "size_MB": 7.93,
+        "description": "Indice d'habitat potentiel",
+        "variable": "H_index",
+        "units": "0-1"
+    }
+}
