@@ -1,10 +1,11 @@
 """
 Tests pour l'API MaziShark déployée sur Vercel
 URL: https://testapi-theta.vercel.app/
+By Mvemba Tsimba DieuMerci
 """
 
 import requests
-import json
+import json 
 
 # Configuration
 BASE_URL = "https://testapi-theta.vercel.app"
