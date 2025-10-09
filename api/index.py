@@ -268,6 +268,8 @@ def root():
         for layer, info in metadata.items()
     }
 
+    data_directory_path = os.path.abspath(PROCESSED_DATA_DIR)
+
     return {
         "name": "MaziShark API",
         "version": "2.0.0",
@@ -284,7 +286,7 @@ def root():
         },
         "available_layers": list(metadata.keys()),
         "layers": layer_summaries,
-        "data_directory": str(PROCESSED_DATA_DIR.resolve()),
+        "data_directory": data_directory_path,
         "tests_reference": {
             "file": "test/test_api.py",
             "description": "Exemples de requêtes automatisées vers l'API",
