@@ -313,16 +313,13 @@ def get_habitat():
     """
     Retourne le GeoJSON de l'habitat potentiel des requins.
     
-    Note: Le fichier habitat_potentiel.geojson n'existe pas encore dans processed_data/.
-    Cet endpoint est préparé pour l'avenir. Pour l'instant, on utilise habitat_index_H.nc.
-    
     Utilisation frontend:
     - Afficher les zones d'habitat sur une carte Leaflet avec react-leaflet
     - Styliser les polygones selon l'intensité de l'indice H
     """
     try:
-        # Vérifier si le GeoJSON existe
-        geojson_path = get_data_path("habitat_potentiel.geojson")
+        # Chercher le fichier GeoJSON (shark_habitat_index.geojson)
+        geojson_path = get_data_path("shark_habitat_index.geojson")
         with open(geojson_path, "r", encoding="utf-8") as f:
             geojson_data = json.load(f)
         return geojson_data
@@ -338,7 +335,7 @@ def get_habitat():
         except:
             raise HTTPException(
                 status_code=404,
-                detail="Fichier habitat_potentiel.geojson introuvable. Générez-le depuis le notebook."
+                detail="Fichier shark_habitat_index.geojson introuvable."
             )
 
 
