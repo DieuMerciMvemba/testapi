@@ -2,31 +2,166 @@
     "pace_chlor_a": {
         "filename": "pace_chlor_a.nc",
         "path": "processed_data/pace_chlor_a.nc",
-        "size_MB": 0.41,
-        "description": "Chlorophylle PACE OCI (résolution native)"
+        "size_MB": 17.0,
+        "description": "Chlorophylle-a PACE (haute résolution OCI)",
+        "dimensions": {
+            "number_of_lines": 1709,
+            "pixels_per_line": 1272
+        },
+        "variables": {
+            "chlor_a": {
+                "dtype": "float32",
+                "dims": [
+                    "number_of_lines",
+                    "pixels_per_line"
+                ],
+                "min": 0.043472916,
+                "max": 0.95573729,
+                "mean": 0.275602907
+            }
+        },
+        "coordinates": {
+            "lat": {
+                "dtype": "float32",
+                "dims": [
+                    "number_of_lines",
+                    "pixels_per_line"
+                ]
+            },
+            "lon": {
+                "dtype": "float32",
+                "dims": [
+                    "number_of_lines",
+                    "pixels_per_line"
+                ]
+            }
+        },
+        "requests": {
+            "data": "/data/pace_chlor_a?sample=true&max_points=5000",
+            "map": "/data/pace_chlor_a/map?cmap=viridis"
+        }
     },
     "modis_chlor_a": {
         "filename": "modis_chlor_a.nc",
         "path": "processed_data/modis_chlor_a.nc",
-        "size_MB": 1.0,
-        "description": "Chlorophylle MODIS (4 temps)"
+        "size_MB": 0.94,
+        "description": "Chlorophylle-a MODIS (4 pas de temps)",
+        "dimensions": {
+            "time": 4,
+            "lat": 720,
+            "lon": 1440
+        },
+        "variables": {
+            "chlor_a": {
+                "dtype": "float32",
+                "dims": [
+                    "time",
+                    "lat",
+                    "lon"
+                ],
+                "min": 0.002130415,
+                "max": 83.853378296,
+                "mean": 0.427669138
+            }
+        },
+        "requests": {
+            "data": "/data/modis_chlor_a?sample=true&max_points=5000",
+            "map": "/data/modis_chlor_a/map?cmap=turbo"
+        }
     },
     "sst_celsius": {
         "filename": "sst_celsius.nc",
         "path": "processed_data/sst_celsius.nc",
-        "size_MB": 1.8,
-        "description": "Température de surface (SST)"
+        "size_MB": 1.79,
+        "description": "Température de surface de la mer (°C)",
+        "dimensions": {
+            "time": 1,
+            "lat": 720,
+            "lon": 1440
+        },
+        "variables": {
+            "sst_celsius": {
+                "dtype": "float64",
+                "dims": [
+                    "time",
+                    "lat",
+                    "lon"
+                ],
+                "min": -1.8,
+                "max": 33.298,
+                "mean": 14.152983753
+            }
+        },
+        "requests": {
+            "data": "/data/sst_celsius?sample=true&max_points=5000",
+            "map": "/data/sst_celsius/map?cmap=inferno"
+        }
     },
     "swot_ssh": {
         "filename": "swot_ssh.nc",
         "path": "processed_data/swot_ssh.nc",
-        "size_MB": 0.06,
-        "description": "Hauteur de mer SWOT (SSH)"
+        "size_MB": 0.04,
+        "description": "Hauteur de mer SWOT (SSH)",
+        "dimensions": {
+            "lat": 720,
+            "lon": 1440
+        },
+        "variables": {
+            "ssh": {
+                "dtype": "float64",
+                "dims": [
+                    "lat",
+                    "lon"
+                ],
+                "min": -0.331811111,
+                "max": 9.2737,
+                "mean": 1.410980906
+            }
+        },
+        "requests": {
+            "data": "/data/swot_ssh?sample=true&max_points=5000",
+            "map": "/data/swot_ssh/map?cmap=cividis"
+        }
     },
     "habitat_index_H": {
         "filename": "habitat_index_H.nc",
         "path": "processed_data/habitat_index_H.nc",
-        "size_MB": 3.1,
-        "description": "Indice d'habitat potentiel (H)"
+        "size_MB": 3.12,
+        "description": "Indice d'habitat potentiel (H agrégé)",
+        "dimensions": {
+            "lat": 720,
+            "lon": 1440
+        },
+        "variables": {
+            "H_index": {
+                "dtype": "float64",
+                "dims": [
+                    "lat",
+                    "lon"
+                ],
+                "min": 0.0,
+                "max": 1.0,
+                "mean": 0.372203348
+            }
+        },
+        "coordinates": {
+            "lat": {
+                "dtype": "float32",
+                "dims": [
+                    "lat"
+                ]
+            },
+            "lon": {
+                "dtype": "float32",
+                "dims": [
+                    "lon"
+                ]
+            }
+        },
+        "requests": {
+            "data": "/data/habitat_index_H?sample=true&max_points=5000",
+            "map": "/data/habitat_index_H/map?cmap=viridis",
+            "predict": "/predict?lat=-21.1&lon=55.5"
+        }
     }
 }

@@ -254,6 +254,20 @@ def root():
     Point d'entrée de l'API - Documentation des endpoints disponibles.
     Utilisé pour vérifier que l'API fonctionne et découvrir les routes.
     """
+    metadata = load_metadata()
+
+    layer_summaries = {
+        layer: {
+            "description": info.get("description"),
+            "size_MB": info.get("size_MB"),
+            "dimensions": info.get("dimensions"),
+            "variables": info.get("variables"),
+            "coordinates": info.get("coordinates"),
+            "requests": info.get("requests"),
+        }
+        for layer, info in metadata.items()
+    }
+
     return {
         "name": "MaziShark API",
         "version": "2.0.0",
@@ -268,8 +282,13 @@ def root():
             "/predict?lat={lat}&lon={lon}": "Prédiction de l'indice H à un point",
             "/hotspots": "Zones à fort potentiel (top 20%)",
         },
-        "available_layers": list(load_metadata().keys()),
-        "data_directory": PROCESSED_DATA_DIR,
+        "available_layers": list(metadata.keys()),
+        "layers": layer_summaries,
+        "data_directory": str(PROCESSED_DATA_DIR.resolve()),
+        "tests_reference": {
+            "file": "test/test_api.py",
+            "description": "Exemples de requêtes automatisées vers l'API",
+        },
     }
 
 
