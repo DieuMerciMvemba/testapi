@@ -11,6 +11,8 @@ Endpoints principaux:
 - GET /data/{layer_name}/map : Génère une carte PNG d'une couche
 - GET /predict : Prédiction de l'indice H à un point lat/lon
 - GET /hotspots : Retourne les zones à fort potentiel (top 20%)
+
+By Mvemba Tsimba DieuMerci
 """
 
 from fastapi import FastAPI, HTTPException, Query, Path
