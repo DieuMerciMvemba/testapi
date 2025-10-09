@@ -1,58 +1,126 @@
-# ============================================================================
-# MAZISHARK API v2.0.0 - Backend scientifique pour habitats de requins
-# ============================================================================
+"""
+🦈 MaziShark API Backend - FastAPI
+===================================
+Backend scientifique pour visualiser les données océanographiques et l'habitat potentiel des requins.
 
+Endpoints principaux:
+- GET / : Documentation de l'API
+- GET /data/layers : Liste toutes les couches disponibles (metadata.json)
+- GET /data/habitat : Retourne le GeoJSON de l'habitat potentiel
+- GET /data/{layer_name} : Retourne les données NetCDF d'une couche spécifique
+- GET /data/{layer_name}/map : Génère une carte PNG d'une couche
+- GET /predict : Prédiction de l'indice H à un point lat/lon
+- GET /hotspots : Retourne les zones à fort potentiel (top 20%)
+"""
+
+from fastapi import FastAPI, HTTPException, Query, Path
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from typing import Optional, Dict, Any
+from functools import lru_cache
 import os
-import json
-import logging
-import datetime
 import io
-from typing import Optional
-from pathlib import Path
-
+import json
+import hashlib
+import logging
+import urllib.request
+import urllib.error
+import time
+import datetime
 import numpy as np
 import xarray as xr
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from fastapi import FastAPI, HTTPException, Query, Path
-from fastapi.responses import StreamingResponse, JSONResponse
 
 # Configuration du logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
 # ============================================================================
-# CONFIGURATION
+# Configuration de l'application FastAPI
 # ============================================================================
 
 app = FastAPI(
     title="MaziShark API",
-    description="API scientifique pour la visualisation des habitats de requins",
-    version="2.0.0"
+    version="2.0.0",
+    description="API scientifique pour la visualisation des habitats de requins basée sur PACE, MODIS, SST et SWOT"
 )
 
-# Répertoire des données NetCDF
-PROCESSED_DATA_DIR = Path("processed_data")
+# Configuration CORS - Permet les requêtes depuis n'importe quelle origine
+# Important pour que le frontend React/Next.js puisse consommer l'API
+cors_env = os.getenv("CORS_ALLOW_ORIGINS", "*")
+allow_origins = [o.strip() for o in cors_env.split(",") if o.strip()] if cors_env else ["*"]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allow_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-# Cache en mémoire pour les datasets (évite de recharger à chaque requête)
-_DATASET_CACHE = {}
-
-# Colormaps valides pour les cartes
-VALID_COLORMAPS = [
-    'viridis', 'plasma', 'inferno', 'magma', 'cividis',
-    'Blues', 'BuGn', 'BuPu', 'GnBu', 'Greens', 'Greys', 'Oranges', 'OrRd', 'PuBu', 'PuBuGn', 'PuRd', 'Purples', 'RdPu', 'Reds', 'YlGn', 'YlGnBu', 'YlOrBr', 'YlOrRd',
-    'afmhot', 'autumn', 'bone', 'cool', 'copper', 'flag', 'gray', 'hot', 'hsv', 'jet', 'pink', 'prism', 'spring', 'summer', 'winter'
-]
 
 # ============================================================================
-# FONCTIONS UTILITAIRES
+# Configuration des chemins de données
 # ============================================================================
 
-def get_data_path(filename: str) -> Path:
-    """Retourne le chemin complet vers un fichier de données."""
-    return PROCESSED_DATA_DIR / filename
+# Répertoire contenant toutes les données scientifiques (local uniquement)
+PROCESSED_DATA_DIR = "processed_data"
 
-def load_metadata() -> dict:
-    """Charge le fichier metadata.json qui liste les couches disponibles."""
+# Cache des datasets NetCDF en mémoire (évite de recharger à chaque requête)
+_DATASET_CACHE: Dict[str, xr.Dataset] = {}
+
+# Colormaps valides pour matplotlib
+VALID_COLORMAPS = {
+    "viridis", "plasma", "inferno", "magma", "cividis",
+    "coolwarm", "RdYlBu", "RdYlGn", "Spectral", "jet",
+    "hot", "cool", "spring", "summer", "autumn", "winter"
+}
+
+
+def get_data_path(filename: str) -> str:
+    """
+    Retourne le chemin absolu vers un fichier dans processed_data/.
+    
+    Args:
+        filename: Nom du fichier
+    
+    Returns:
+        Chemin local du fichier
+        
+    Raises:
+        FileNotFoundError: Si le fichier n'existe pas
+    """
+    # Chercher dans processed_data/ (local uniquement)
+    local_candidates = [
+        os.path.join(os.path.dirname(__file__), "..", PROCESSED_DATA_DIR, filename),
+        os.path.join(os.getcwd(), PROCESSED_DATA_DIR, filename),
+        os.path.join(PROCESSED_DATA_DIR, filename),
+    ]
+    
+    for path in local_candidates:
+        abs_path = os.path.abspath(path)
+        if os.path.exists(abs_path):
+            logger.info(f"✅ Fichier {filename} trouvé: {abs_path}")
+            return abs_path
+    
+    # Fichier introuvable
+    raise FileNotFoundError(f"Fichier {filename} introuvable dans {PROCESSED_DATA_DIR}/")
+
+
+# ============================================================================
+# Fonctions utilitaires pour charger les données
+# ============================================================================
+
+@lru_cache(maxsize=1)
+def load_metadata() -> Dict[str, Any]:
+    """
+    Charge metadata.json qui contient la liste de toutes les couches disponibles.
+    Utilisé par le frontend pour afficher dynamiquement les options de couches.
+    
+    Cache: Résultat mis en cache (ne charge qu'une seule fois).
+    """
     try:
         path = get_data_path("metadata.json")
         with open(path, "r", encoding="utf-8") as f:
@@ -60,33 +128,35 @@ def load_metadata() -> dict:
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erreur chargement metadata.json: {e}")
 
+
 def load_netcdf(layer_name: str, use_cache: bool = True) -> xr.Dataset:
     """
     Charge un fichier NetCDF (.nc) avec xarray.
     Les fichiers NetCDF contiennent les données scientifiques multidimensionnelles (lat, lon, valeurs).
-
+    
     Cache: Les datasets sont mis en cache en mémoire pour éviter de recharger à chaque requête.
     """
     # Vérifier le cache d'abord
     if use_cache and layer_name in _DATASET_CACHE:
         return _DATASET_CACHE[layer_name]
-
+    
     metadata = load_metadata()
     if layer_name not in metadata:
         raise HTTPException(status_code=404, detail=f"Couche '{layer_name}' introuvable dans metadata.json")
-
+    
     filename = metadata[layer_name]["filename"]
     try:
         path = get_data_path(filename)
         ds = xr.open_dataset(path)
-
+        
         # Mettre en cache
         if use_cache:
             _DATASET_CACHE[layer_name] = ds
-
+        
         return ds
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erreur chargement {filename}: {e}")
+
 
 def get_primary_variable(ds: xr.Dataset) -> str:
     """
@@ -99,27 +169,29 @@ def get_primary_variable(ds: xr.Dataset) -> str:
         raise ValueError("Aucune variable de données trouvée dans le NetCDF")
     return data_vars[0]
 
+
 def sample_data(data: np.ndarray, max_points: int = 10000) -> tuple[np.ndarray, int]:
     """
     Échantillonne les données pour éviter de surcharger la mémoire et le réseau.
     Réduit la résolution si nécessaire pour rester sous max_points.
-
+    
     Returns:
         tuple: (données échantillonnées, facteur d'échantillonnage)
     """
     if data.size <= max_points:
         return data, 1
-
+    
     # Calcul du facteur de sous-échantillonnage
     factor = int(np.ceil(np.sqrt(data.size / max_points)))
     return data[::factor, ::factor], factor
+
 
 def get_lat_lon_arrays(ds: xr.Dataset) -> tuple[np.ndarray, np.ndarray]:
     """
     Extrait les tableaux de latitude et longitude d'un dataset xarray.
     Gère les différents noms de coordonnées (lat/latitude, lon/longitude).
     Cherche dans coords ET dans variables.
-
+    
     Returns:
         tuple: (lat_array, lon_array)
     """
@@ -138,7 +210,7 @@ def get_lat_lon_arrays(ds: xr.Dataset) -> tuple[np.ndarray, np.ndarray]:
         lat_arr = np.linspace(-90, 90, lat_size)  # Hypothèse: grille régulière globale
     else:
         raise ValueError(f"Aucune coordonnée latitude trouvée. Coords: {list(ds.coords)}, Variables: {list(ds.variables)}, Dims: {list(ds.dims)}")
-
+    
     # Détecter le nom de la coordonnée longitude (dans coords ou variables)
     if "lon" in ds.coords:
         lon_arr = ds["lon"].values
@@ -154,8 +226,9 @@ def get_lat_lon_arrays(ds: xr.Dataset) -> tuple[np.ndarray, np.ndarray]:
         lon_arr = np.linspace(-180, 180, lon_size)  # Hypothèse: grille régulière globale
     else:
         raise ValueError(f"Aucune coordonnée longitude trouvée. Coords: {list(ds.coords)}, Variables: {list(ds.variables)}, Dims: {list(ds.dims)}")
-
+    
     return lat_arr, lon_arr
+
 
 def validate_coordinates(lat: float, lon: float, ds: xr.Dataset) -> None:
     """
@@ -163,21 +236,22 @@ def validate_coordinates(lat: float, lon: float, ds: xr.Dataset) -> None:
     Lève une HTTPException si hors limites.
     """
     lat_arr, lon_arr = get_lat_lon_arrays(ds)
-
+    
     lat_min, lat_max = float(lat_arr.min()), float(lat_arr.max())
     lon_min, lon_max = float(lon_arr.min()), float(lon_arr.max())
-
+    
     if not (lat_min <= lat <= lat_max):
         raise HTTPException(
             status_code=400,
             detail=f"Latitude {lat} hors limites. Plage valide: [{lat_min:.2f}, {lat_max:.2f}]"
         )
-
+    
     if not (lon_min <= lon <= lon_max):
         raise HTTPException(
             status_code=400,
             detail=f"Longitude {lon} hors limites. Plage valide: [{lon_min:.2f}, {lon_max:.2f}]"
         )
+
 
 # ============================================================================
 # ENDPOINT 1: Page d'accueil de l'API
@@ -207,10 +281,12 @@ def root():
         "data_directory": PROCESSED_DATA_DIR,
     }
 
+
 @app.get("/health")
 def health():
     """Endpoint de santé pour vérifier que l'API est opérationnelle."""
     return {"status": "ok", "message": "MaziShark API is running"}
+
 
 # ============================================================================
 # ENDPOINT 2: Liste des couches disponibles
@@ -220,7 +296,7 @@ def health():
 def get_layers():
     """
     Retourne metadata.json qui liste toutes les couches scientifiques disponibles.
-
+    
     Utilisation frontend:
     - Afficher dynamiquement les options de couches dans un menu déroulant
     - Connaître les noms de fichiers et tailles pour optimiser le chargement
@@ -235,6 +311,7 @@ def get_layers():
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 # ============================================================================
 # ENDPOINT 3: Habitat potentiel (GeoJSON)
@@ -340,6 +417,7 @@ def get_habitat_geojson(threshold: float = 0.1, max_features: int = 1000, format
             detail=f"Erreur génération GeoJSON: {str(e)}"
         )
 
+
 # ============================================================================
 # ENDPOINT 4: Données NetCDF d'une couche spécifique
 # ============================================================================
@@ -352,22 +430,22 @@ def get_layer_data(
 ):
     """
     Retourne les données d'une couche NetCDF en format JSON.
-
+    
     Optimisations:
     - ✅ Cache: Dataset mis en cache en mémoire
     - ✅ Échantillonnage intelligent: Réduit la résolution si nécessaire
     - ✅ Validation: max_points ∈ [100, 100000]
-
+    
     Paramètres:
     - layer_name: nom de la couche (pace_chlor_a, modis_chlor_a, sst_celsius, swot_ssh, habitat_index_H)
     - sample: si True, réduit la résolution pour optimiser la taille
     - max_points: nombre maximum de points à retourner (100-100000)
-
+    
     Utilisation frontend:
     - Récupérer les données pour affichage sur carte Leaflet
     - Créer des heatmaps ou overlays colorés
     - Afficher les valeurs dans des tooltips au survol
-
+    
     Format de sortie:
     {
         "layer": "pace_chlor_a",
@@ -384,15 +462,15 @@ def get_layer_data(
     try:
         # Chargement avec cache
         ds = load_netcdf(layer_name, use_cache=True)
-
+        
         # Détection automatique de la variable principale
         var_name = get_primary_variable(ds)
         data_var = ds[var_name]
-
+        
         # Extraction des coordonnées
         lat, lon = get_lat_lon_arrays(ds)
         values = data_var.values
-
+        
         # Échantillonnage si demandé
         sampling_factor = 1
         if sample and values.size > max_points:
@@ -400,7 +478,7 @@ def get_layer_data(
             # Réduire aussi les coordonnées avec le même facteur
             lat = lat[::sampling_factor]
             lon = lon[::sampling_factor]
-
+        
         # Calcul des statistiques
         valid_values = values[np.isfinite(values)]
         stats = {
@@ -408,7 +486,7 @@ def get_layer_data(
             "max": float(np.max(valid_values)) if valid_values.size > 0 else None,
             "mean": float(np.mean(valid_values)) if valid_values.size > 0 else None,
         }
-
+        
         # Conversion en listes pour JSON
         return {
             "layer": layer_name,
@@ -428,6 +506,7 @@ def get_layer_data(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erreur traitement {layer_name}: {e}")
 
+
 # ============================================================================
 # ENDPOINT 5: Carte PNG d'une couche
 # ============================================================================
@@ -439,12 +518,12 @@ def get_layer_map(
 ):
     """
     Génère une carte PNG d'une couche NetCDF avec matplotlib.
-
+    
     Optimisations:
     - ✅ Cache: Dataset mis en cache en mémoire
     - ✅ Streaming: Retourne le PNG directement (pas de fichier temporaire)
     - ✅ Validation: Vérifie que la colormap est valide
-
+    
     Utilisation frontend:
     - Afficher comme ImageOverlay sur Leaflet
     - Télécharger la carte en haute résolution
@@ -456,49 +535,50 @@ def get_layer_map(
             status_code=400,
             detail=f"Colormap '{cmap}' invalide. Valides: {', '.join(sorted(VALID_COLORMAPS))}"
         )
-
+    
     try:
         # Chargement avec cache
         ds = load_netcdf(layer_name, use_cache=True)
         var_name = get_primary_variable(ds)
         data_var = ds[var_name]
-
+        
         lat, lon = get_lat_lon_arrays(ds)
         values = data_var.values
-
+        
         # Création de la figure
         fig, ax = plt.subplots(figsize=(12, 8))
         im = ax.pcolormesh(lon, lat, values, cmap=cmap, shading="auto")
-
+        
         # Titre et labels
         title = data_var.attrs.get("long_name", layer_name)
         units = data_var.attrs.get("units", "")
         ax.set_title(f"{title}", fontsize=14, fontweight="bold")
         ax.set_xlabel("Longitude", fontsize=12)
         ax.set_ylabel("Latitude", fontsize=12)
-
+        
         # Colorbar
         cbar = plt.colorbar(im, ax=ax, label=f"{units}")
         cbar.ax.tick_params(labelsize=10)
-
+        
         # Sauvegarde en mémoire (streaming, pas de fichier temporaire)
         buf = io.BytesIO()
         plt.tight_layout()
         fig.savefig(buf, format="png", dpi=150, bbox_inches="tight")
         plt.close(fig)
         buf.seek(0)
-
+        
         # Retour direct en streaming (évite les fichiers temporaires et conflits)
         return StreamingResponse(
             buf,
             media_type="image/png",
             headers={"Content-Disposition": f"inline; filename={layer_name}_map.png"}
         )
-
+    
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erreur génération carte {layer_name}: {e}")
+
 
 # ============================================================================
 # ENDPOINT 6: Prédiction au point (lat, lon)
@@ -511,12 +591,12 @@ def predict(
 ):
     """
     Retourne l'indice d'habitat H au point le plus proche (nearest neighbor).
-
+    
     Optimisations:
     - ✅ Cache: Dataset mis en cache en mémoire
     - ✅ Validation: Vérifie que lat/lon sont dans les limites du dataset
     - ✅ Validation: Vérifie que lat ∈ [-90, 90] et lon ∈ [-180, 180]
-
+    
     Utilisation frontend:
     - Clic sur la carte pour obtenir la valeur H
     - Afficher dans un popup ou panneau latéral
@@ -525,20 +605,20 @@ def predict(
     try:
         # Chargement avec cache
         ds = load_netcdf("habitat_index_H", use_cache=True)
-
+        
         # Validation des coordonnées (vérifie qu'elles sont dans la plage du dataset)
         validate_coordinates(lat, lon, ds)
-
+        
         H = ds["H_index"]
         lat_arr = ds["lat"].values
         lon_arr = ds["lon"].values
-
+        
         # Recherche du voisin le plus proche
         i = int(np.abs(lat_arr - lat).argmin())
         j = int(np.abs(lon_arr - lon).argmin())
-
+        
         val = float(H.values[i, j]) if np.isfinite(H.values[i, j]) else None
-
+        
         return {
             "lat": lat,
             "lon": lon,
@@ -548,13 +628,14 @@ def predict(
             "grid_indices": {"i": i, "j": j},
             "interpretation": "High potential" if val and val > 0.7 else "Moderate potential" if val and val > 0.4 else "Low potential"
         }
-
+    
     except HTTPException:
         raise
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Fichier habitat_index_H.nc introuvable")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erreur prédiction: {e}")
+
 
 # ============================================================================
 # ENDPOINT 7: Hotspots (zones à fort potentiel)
@@ -564,7 +645,7 @@ def predict(
 def get_hotspots():
     """
     Retourne les zones à fort potentiel d'habitat (top 20% des valeurs H).
-
+    
     Utilisation frontend:
     - Afficher des marqueurs sur les zones prioritaires
     - Créer une liste de recommandations pour les chercheurs
@@ -573,28 +654,29 @@ def get_hotspots():
     try:
         # Vérifier si le CSV existe
         csv_path = get_data_path("hotspots_H_top20.csv")
-
+        
         # Lecture simple du CSV
         hotspots = []
         with open(csv_path, "r", encoding="utf-8") as f:
             lines = f.readlines()
             headers = lines[0].strip().split(",")
-
+            
             for line in lines[1:]:
                 values = line.strip().split(",")
                 hotspot = {headers[i]: float(values[i]) if i > 0 else int(values[i]) for i in range(len(headers))}
                 hotspots.append(hotspot)
-
+        
         return {
             "hotspots": hotspots,
             "count": len(hotspots),
             "description": "Top 20% des zones avec le plus fort indice d'habitat"
         }
-
+    
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Fichier hotspots_H_top20.csv introuvable")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erreur chargement hotspots: {e}")
+
 
 # ============================================================================
 # ENDPOINT LEGACY: Compatibilité avec l'ancien frontend
@@ -614,7 +696,111 @@ def meta():
     except:
         raise HTTPException(status_code=404, detail="Données habitat introuvables")
 
+
 @app.get("/map")
 def map_legacy():
     """Endpoint de compatibilité - redirige vers /data/habitat_index_H/map"""
     return get_layer_map("habitat_index_H")
+
+
+@app.get("/data/habitat")
+def get_habitat_geojson(threshold: float = 0.1, max_features: int = 1000, format: str = "geojson"):
+    """
+    Génère un GeoJSON des zones d'habitat potentiel à partir de habitat_index_H.nc
+
+    Args:
+        threshold: Seuil H_index minimum (0.0-1.0)
+        max_features: Nombre maximum de polygones à générer
+        format: Format de sortie ("geojson" ou "json")
+
+    Retourne uniquement les cellules avec H_index > threshold (zones favorables)
+    """
+    try:
+        # Validation des paramètres
+        if not 0.0 <= threshold <= 1.0:
+            raise HTTPException(status_code=400, detail="Threshold doit être entre 0.0 et 1.0")
+        if max_features < 1 or max_features > 50000:
+            raise HTTPException(status_code=400, detail="max_features doit être entre 1 et 50000")
+
+        # Charger le fichier NetCDF
+        ds = load_netcdf("habitat_index_H", use_cache=True)
+
+        # Extraire les données
+        lat, lon = get_lat_lon_arrays(ds)
+        h_values = ds["H_index"].values
+
+        # Filtrer les zones favorables (H > threshold)
+        mask = h_values > threshold
+
+        # Créer les features GeoJSON
+        features = []
+        lat_indices, lon_indices = np.where(mask)
+
+        # Limiter le nombre de features
+        total_features = min(len(lat_indices), max_features)
+
+        for idx in range(total_features):
+            i, j = lat_indices[idx], lon_indices[idx]
+            lat_center = float(lat[i])
+            lon_center = float(lon[j])
+            h_value = float(h_values[i, j])
+
+            # Créer un petit polygone autour du point central
+            # Résolution approximative: ~0.25° par cellule
+            half_res_lat = 0.125  # 0.25° / 2
+            half_res_lon = 0.125
+
+            # Coordonnées du polygone (rectangle autour du point)
+            polygon_coords = [
+                [lon_center - half_res_lon, lat_center - half_res_lat],  # SW
+                [lon_center + half_res_lon, lat_center - half_res_lat],  # SE
+                [lon_center + half_res_lon, lat_center + half_res_lat],  # NE
+                [lon_center - half_res_lon, lat_center + half_res_lat],  # NW
+                [lon_center - half_res_lon, lat_center - half_res_lat]   # Fermer le polygone
+            ]
+
+            feature = {
+                "type": "Feature",
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [polygon_coords]
+                },
+                "properties": {
+                    "H_index": h_value,
+                    "latitude": lat_center,
+                    "longitude": lon_center,
+                    "habitat_potential": "high" if h_value > 0.8 else "medium",
+                    "confidence": min(h_value * 100, 100)  # Pourcentage
+                }
+            }
+            features.append(feature)
+
+        # Créer le GeoJSON complet
+        geojson = {
+            "type": "FeatureCollection",
+            "features": features,
+            "metadata": {
+                "total_zones": len(features),
+                "total_available": len(lat_indices),
+                "threshold": threshold,
+                "max_features": max_features,
+                "generated_at": datetime.datetime.now().isoformat(),
+                "source": "habitat_index_H.nc"
+            }
+        }
+
+        # Headers pour GeoJSON
+        headers = {"Content-Type": "application/geo+json"}
+
+        return JSONResponse(content=geojson, headers=headers)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Erreur génération GeoJSON habitat: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erreur génération GeoJSON: {str(e)}"
+        )
+
+
