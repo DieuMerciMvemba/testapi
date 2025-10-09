@@ -1,0 +1,14 @@
+# Fichiers volumineux à exclure du déploiement Vercel
+# Ces fichiers seront téléchargés depuis GitHub Release à la demande
+
+processed_data/pace_chlor_a.nc
+processed_data/modis_chlor_a.nc
+processed_data/sst_celsius.nc
+processed_data/swot_ssh.nc
+processed_data/shark_habitat_index.geojson
+
+# Garder uniquement les fichiers essentiels:
+# - habitat_index_H.nc (3.1 MB)
+# - shark_habitat_index.geojson.gz (206 KB)
+# - hotspots_H_top20.csv (729 B)
+# - metadata.json (995 B)

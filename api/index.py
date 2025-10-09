@@ -7,6 +7,8 @@ import json
 import logging
 import datetime
 import io
+import gzip
+import requests
 from typing import Optional
 from pathlib import Path
 
@@ -36,6 +38,17 @@ PROCESSED_DATA_DIR = Path("processed_data")
 # Cache en mémoire pour les datasets (évite de recharger à chaque requête)
 _DATASET_CACHE = {}
 
+# URL GitHub Release pour téléchargement fichiers volumineux
+GITHUB_RELEASE_URL = "https://github.com/DieuMerciMvemba/testapi/releases/download/v1.0.0"
+
+# Fichiers à télécharger depuis GitHub Release si absents
+REMOTE_FILES = {
+    "pace_chlor_a.nc",
+    "modis_chlor_a.nc",
+    "sst_celsius.nc",
+    "swot_ssh.nc"
+}
+
 # Colormaps valides pour les cartes
 VALID_COLORMAPS = [
     'viridis', 'plasma', 'inferno', 'magma', 'cividis',
@@ -60,12 +73,46 @@ def load_metadata() -> dict:
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erreur chargement metadata.json: {e}")
 
+def download_file_from_github(filename: str) -> None:
+    """
+    Télécharge un fichier depuis GitHub Release si absent localement.
+    """
+    local_path = get_data_path(filename)
+    
+    if local_path.exists():
+        return  # Fichier déjà présent
+    
+    logger.info(f"Téléchargement de {filename} depuis GitHub Release...")
+    
+    try:
+        url = f"{GITHUB_RELEASE_URL}/{filename}"
+        response = requests.get(url, timeout=60, stream=True)
+        response.raise_for_status()
+        
+        # Créer le dossier si nécessaire
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Télécharger avec streaming
+        with open(local_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+        
+        logger.info(f"✅ {filename} téléchargé avec succès")
+    
+    except Exception as e:
+        logger.error(f"❌ Erreur téléchargement {filename}: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail=f"Impossible de télécharger {filename} depuis GitHub Release: {e}"
+        )
+
 def load_netcdf(layer_name: str, use_cache: bool = True) -> xr.Dataset:
     """
     Charge un fichier NetCDF (.nc) avec xarray.
     Les fichiers NetCDF contiennent les données scientifiques multidimensionnelles (lat, lon, valeurs).
 
     Cache: Les datasets sont mis en cache en mémoire pour éviter de recharger à chaque requête.
+    Télécharge depuis GitHub Release si fichier absent localement.
     """
     # Vérifier le cache d'abord
     if use_cache and layer_name in _DATASET_CACHE:
@@ -76,6 +123,11 @@ def load_netcdf(layer_name: str, use_cache: bool = True) -> xr.Dataset:
         raise HTTPException(status_code=404, detail=f"Couche '{layer_name}' introuvable dans metadata.json")
 
     filename = metadata[layer_name]["filename"]
+    
+    # Télécharger depuis GitHub Release si nécessaire
+    if filename in REMOTE_FILES:
+        download_file_from_github(filename)
+    
     try:
         path = get_data_path(filename)
         ds = xr.open_dataset(path)
@@ -245,8 +297,8 @@ def get_habitat_geojson(threshold: Optional[float] = None, max_features: Optiona
     """
     Retourne le GeoJSON pré-généré des zones d'habitat potentiel.
     
-    Le fichier shark_habitat_index.geojson contient toutes les zones d'habitat
-    calculées à partir de habitat_index_H.nc.
+    Le fichier shark_habitat_index.geojson.gz contient toutes les zones d'habitat
+    calculées à partir de habitat_index_H.nc (version compressée).
     
     Args:
         threshold: (Optionnel) Filtre les features avec H_index >= threshold
@@ -256,11 +308,19 @@ def get_habitat_geojson(threshold: Optional[float] = None, max_features: Optiona
         GeoJSON avec les zones d'habitat potentiel
     """
     try:
-        # Charger le GeoJSON pré-généré
+        # Charger le GeoJSON pré-généré (version compressée)
+        geojson_gz_path = get_data_path("shark_habitat_index.geojson.gz")
         geojson_path = get_data_path("shark_habitat_index.geojson")
         
-        with open(geojson_path, "r", encoding="utf-8") as f:
-            geojson_data = json.load(f)
+        # Utiliser la version compressée si disponible
+        if geojson_gz_path.exists():
+            with gzip.open(geojson_gz_path, 'rt', encoding='utf-8') as f:
+                geojson_data = json.load(f)
+        elif geojson_path.exists():
+            with open(geojson_path, "r", encoding="utf-8") as f:
+                geojson_data = json.load(f)
+        else:
+            raise FileNotFoundError("Aucun fichier GeoJSON trouvé")
         
         # Appliquer les filtres si demandés
         if threshold is not None or max_features is not None:
