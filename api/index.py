@@ -241,103 +241,74 @@ def get_layers():
 # ============================================================================
 
 @app.get("/data/habitat")
-def get_habitat_geojson(threshold: float = 0.1, max_features: int = 1000, format: str = "geojson"):
+def get_habitat_geojson(threshold: Optional[float] = None, max_features: Optional[int] = None):
     """
-    Génère un GeoJSON des zones d'habitat potentiel à partir de habitat_index_H.nc
-
+    Retourne le GeoJSON pré-généré des zones d'habitat potentiel.
+    
+    Le fichier shark_habitat_index.geojson contient toutes les zones d'habitat
+    calculées à partir de habitat_index_H.nc.
+    
     Args:
-        threshold: Seuil H_index minimum (0.0-1.0)
-        max_features: Nombre maximum de polygones à générer
-        format: Format de sortie ("geojson" ou "json")
-
-    Retourne uniquement les cellules avec H_index > threshold (zones favorables)
+        threshold: (Optionnel) Filtre les features avec H_index >= threshold
+        max_features: (Optionnel) Limite le nombre de features retournées
+    
+    Returns:
+        GeoJSON avec les zones d'habitat potentiel
     """
     try:
-        # Validation des paramètres
-        if not 0.0 <= threshold <= 1.0:
-            raise HTTPException(status_code=400, detail="Threshold doit être entre 0.0 et 1.0")
-        if max_features < 1 or max_features > 50000:
-            raise HTTPException(status_code=400, detail="max_features doit être entre 1 et 50000")
-
-        # Charger le fichier NetCDF
-        ds = load_netcdf("habitat_index_H", use_cache=True)
-
-        # Extraire les données
-        lat, lon = get_lat_lon_arrays(ds)
-        h_values = ds["H_index"].values
-
-        # Filtrer les zones favorables (H > threshold)
-        mask = h_values > threshold
-
-        # Créer les features GeoJSON
-        features = []
-        lat_indices, lon_indices = np.where(mask)
-
-        # Limiter le nombre de features
-        total_features = min(len(lat_indices), max_features)
-
-        for idx in range(total_features):
-            i, j = lat_indices[idx], lon_indices[idx]
-            lat_center = float(lat[i])
-            lon_center = float(lon[j])
-            h_value = float(h_values[i, j])
-
-            # Créer un petit polygone autour du point central
-            # Résolution approximative: ~0.25° par cellule
-            half_res_lat = 0.125  # 0.25° / 2
-            half_res_lon = 0.125
-
-            # Coordonnées du polygone (rectangle autour du point)
-            polygon_coords = [
-                [lon_center - half_res_lon, lat_center - half_res_lat],  # SW
-                [lon_center + half_res_lon, lat_center - half_res_lat],  # SE
-                [lon_center + half_res_lon, lat_center + half_res_lat],  # NE
-                [lon_center - half_res_lon, lat_center + half_res_lat],  # NW
-                [lon_center - half_res_lon, lat_center - half_res_lat]   # Fermer le polygone
-            ]
-
-            feature = {
-                "type": "Feature",
-                "geometry": {
-                    "type": "Polygon",
-                    "coordinates": [polygon_coords]
-                },
-                "properties": {
-                    "H_index": h_value,
-                    "latitude": lat_center,
-                    "longitude": lon_center,
-                    "habitat_potential": "high" if h_value > 0.8 else "medium",
-                    "confidence": min(h_value * 100, 100)  # Pourcentage
-                }
-            }
-            features.append(feature)
-
-        # Créer le GeoJSON complet
-        geojson = {
-            "type": "FeatureCollection",
-            "features": features,
-            "metadata": {
-                "total_zones": len(features),
-                "total_available": len(lat_indices),
-                "threshold": threshold,
-                "max_features": max_features,
-                "generated_at": datetime.datetime.now().isoformat(),
-                "source": "habitat_index_H.nc"
-            }
-        }
-
+        # Charger le GeoJSON pré-généré
+        geojson_path = get_data_path("shark_habitat_index.geojson")
+        
+        with open(geojson_path, "r", encoding="utf-8") as f:
+            geojson_data = json.load(f)
+        
+        # Appliquer les filtres si demandés
+        if threshold is not None or max_features is not None:
+            features = geojson_data.get("features", [])
+            
+            # Filtrer par seuil H_index
+            if threshold is not None:
+                if not 0.0 <= threshold <= 1.0:
+                    raise HTTPException(status_code=400, detail="Threshold doit être entre 0.0 et 1.0")
+                features = [f for f in features if f.get("properties", {}).get("H_index", 0) >= threshold]
+            
+            # Limiter le nombre de features
+            if max_features is not None:
+                if max_features < 1:
+                    raise HTTPException(status_code=400, detail="max_features doit être >= 1")
+                features = features[:max_features]
+            
+            # Mettre à jour le GeoJSON avec les features filtrées
+            geojson_data["features"] = features
+            
+            # Ajouter des métadonnées sur le filtrage
+            if "metadata" not in geojson_data:
+                geojson_data["metadata"] = {}
+            
+            geojson_data["metadata"]["filtered"] = True
+            geojson_data["metadata"]["returned_features"] = len(features)
+            if threshold is not None:
+                geojson_data["metadata"]["threshold_applied"] = threshold
+            if max_features is not None:
+                geojson_data["metadata"]["max_features_applied"] = max_features
+        
         # Headers pour GeoJSON
         headers = {"Content-Type": "application/geo+json"}
-
-        return JSONResponse(content=geojson, headers=headers)
-
+        
+        return JSONResponse(content=geojson_data, headers=headers)
+    
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=404,
+            detail="Fichier shark_habitat_index.geojson introuvable dans processed_data/"
+        )
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Erreur génération GeoJSON habitat: {e}")
+        logger.error(f"Erreur chargement GeoJSON habitat: {e}")
         raise HTTPException(
             status_code=500,
-            detail=f"Erreur génération GeoJSON: {str(e)}"
+            detail=f"Erreur chargement GeoJSON: {str(e)}"
         )
 
 # ============================================================================
