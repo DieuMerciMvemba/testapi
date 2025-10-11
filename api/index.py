@@ -16,9 +16,10 @@ By Mvemba Tsimba DieuMerci
 """
 
 from fastapi import FastAPI, HTTPException, Query, Path
+from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from functools import lru_cache
 import os
 import io
@@ -33,6 +34,7 @@ import xarray as xr
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import requests
 
 # Configuration du logging
 logging.basicConfig(level=logging.INFO)
@@ -73,11 +75,32 @@ PROCESSED_DATA_DIR = "processed_data"
 _DATASET_CACHE: Dict[str, xr.Dataset] = {}
 
 # Colormaps valides pour matplotlib
+# Colormaps valides pour matplotlib
 VALID_COLORMAPS = {
     "viridis", "plasma", "inferno", "magma", "cividis",
     "coolwarm", "RdYlBu", "RdYlGn", "Spectral", "jet",
     "hot", "cool", "spring", "summer", "autumn", "winter"
 }
+
+# Configuration FinAI / OpenAI
+MAX_AI_MESSAGES = 8
+OPENAI_TIMEOUT = 20
+
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+
+class ChatRequest(BaseModel):
+    messages: List[ChatMessage]
+
+
+def get_openai_api_key() -> str:
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY manquante côté serveur")
+    return api_key
 
 
 def get_data_path(filename: str) -> str:
@@ -620,6 +643,70 @@ def get_hotspots():
         raise HTTPException(status_code=404, detail="Fichier hotspots_H_top20.csv introuvable")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erreur chargement hotspots: {e}")
+
+
+# ============================================================================
+# ENDPOINT AI: Proxy FinAI -> OpenAI
+# ============================================================================
+
+
+@app.post("/finai/chat")
+def finai_chat(request: ChatRequest):
+    if not request.messages:
+        raise HTTPException(status_code=400, detail="messages obligatoires")
+
+    trimmed_messages = request.messages[-MAX_AI_MESSAGES:]
+
+    formatted_messages = []
+    for message in trimmed_messages:
+        role = message.role if message.role in {"system", "user", "assistant"} else "user"
+        content = message.content.strip()
+        if not content:
+            continue
+        formatted_messages.append({"role": role, "content": content})
+
+    if not formatted_messages:
+        raise HTTPException(status_code=400, detail="messages invalides")
+
+    payload = {
+        "model": "gpt-3.5-turbo",
+        "messages": formatted_messages,
+        "temperature": 0.6,
+        "max_tokens": 320,
+    }
+
+    headers = {
+        "Authorization": f"Bearer {get_openai_api_key()}",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        response = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers=headers,
+            json=payload,
+            timeout=OPENAI_TIMEOUT,
+        )
+    except requests.RequestException as exc:
+        logger.error("Erreur réseau OpenAI: %s", exc)
+        raise HTTPException(status_code=502, detail="Erreur de communication avec OpenAI") from exc
+
+    if response.status_code == 429:
+        raise HTTPException(status_code=429, detail="Limite de requêtes OpenAI atteinte, réessayez plus tard")
+
+    if not response.ok:
+        logger.error("Réponse OpenAI invalide %s: %s", response.status_code, response.text)
+        raise HTTPException(status_code=502, detail="Réponse OpenAI invalide")
+
+    data = response.json()
+    choice = data.get("choices", [{}])[0]
+    message = choice.get("message", {})
+    content = message.get("content", "").strip()
+
+    if not content:
+        content = "Je réfléchirai davantage et te donnerai une réponse complète bientôt."
+
+    return {"content": content}
 
 
 # ============================================================================
